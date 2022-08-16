@@ -1231,7 +1231,7 @@ static double intpres(gtime_t time, const obsd_t *obs, int n, const nav_t *nav,
 /* index for SD to DD transformation matrix D --------------------------------*/
 static int ddidx(rtk_t *rtk, int *ix)
 {
-    int i,j,k,m,f,nb=0,na=rtk->na,nf=NF(&rtk->opt),nofix;
+    int i,j,k,m,f,nb=0,na=rtk->na,nf=NF(&rtk->opt),nofix,nx=rtk->nx;
     
     trace(3,"ddidx   :\n");
     
@@ -1266,6 +1266,9 @@ static int ddidx(rtk_t *rtk, int *ix)
                     rtk->ssat[j-k].azel[1]>=rtk->opt.elmaskar&&!nofix) {
                     ix[nb*2  ]=i; /* state index of ref bias */
                     ix[nb*2+1]=j; /* state index of target bias */
+#ifdef _DENUG
+                    printf("%3i,%3i,%3i,%3i,%3i,%10.4f,%10.4f,%10.4f,%10.4f\n", m, f, nb, i, j, rtk->x[i], rtk->x[j], rtk->x[j] - rtk->x[i], sqrt(rtk->P[j + j * nx] + rtk->P[i + i * nx] - rtk->P[i + j * nx] - rtk->P[j + i * nx]));
+#endif
                     nb++;
                     rtk->ssat[j-k].fix[f]=2; /* fix */
                 }
@@ -1482,6 +1485,47 @@ static int relpos(rtk_t *rtk, const obsd_t *obs, int nu, int nr,
     }
     /* satellite positions/clocks */
     satposs(time,obs,n,nav,opt->sateph,rs,dts,var,svh);
+
+#ifdef _WIN32
+    static FILE* fBL = NULL;
+    if (!fBL&&n>0)
+    {
+        char buffer[255] = { 0 };
+        double ep[6] = { 0 };
+        time2epoch(obs[0].time, ep);
+        sprintf(buffer, "%04i-%02i-%02i-%02i-%02i-%02i-bl.csv", (int)ep[0], (int)ep[1], (int)ep[2], (int)ep[3], (int)ep[4], (int)ep[5]);
+        fBL = fopen(buffer, "w");
+    }
+    if (fBL)
+    {
+        for (int i = 0; i < n; ++i)
+        {
+            const obsd_t* obsd = obs + i;
+            int wk = 0;
+            double ws = time2gpst(obsd->time, &wk);
+            int prn = 0;
+            int sys = satsys(obsd->sat, &prn);
+            double* cur_rs = rs + i * 6;
+            double* cur_dts = dts + i * 2;
+            for (int f = 0; f < (NFREQ + NEXOBS); ++f)
+            {
+                if (obsd->code[f] == 0) continue;
+                double frq = sat2freq(obsd->sat, obsd->code[f], nav);
+                fprintf(fBL, "%i,%12.4f,%3i,%3i,%3i,%3i,%14.4f,%14.4f,%10.4f,%7.2f,%14.4f,%14.4f,%14.4f,%10.4f,%10.4f,%10.4f,%14.4f,%10.4f,%f,%i\n"
+                    , obsd->rcv
+                    , ws /* 1 */
+                    , obsd->sat, sys, prn, obsd->code[f] /* 2,3,4,5 */
+                    , obsd->P[f], obsd->L[f], obsd->D[f], obsd->SNR[f] * SNR_UNIT /* 6,7,8,9 */
+                    , cur_rs[0], cur_rs[1], cur_rs[2], cur_rs[3], cur_rs[4], cur_rs[5] /* 10,11,12,13,14,15 */
+                    , cur_dts[0] * CLIGHT, cur_dts[1] * CLIGHT
+                    , frq
+					, code2idx(sys,obsd->code[f])
+                );
+            }
+        }
+        fflush(fBL);
+    }
+#endif 
     
     /* UD (undifferenced) residuals for base station */
     if (!zdres(1,obs+nu,nr,rs+nu*6,dts+nu*2,var+nu,svh+nu,nav,rtk->rb,opt,1,

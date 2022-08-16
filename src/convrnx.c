@@ -1000,6 +1000,54 @@ static void convobs(FILE **ofp, rnxopt_t *opt, strfile_t *str, int *n,
     if (tend->time&&timediff(time,*tend)<opt->ttol) return;
     *tend=time;
 
+#if 0
+    double *rs=mat(6,str->obs->n),*dts=mat(2,str->obs->n),*var=mat(1,str->obs->n),*azel_=zeros(2,str->obs->n),*resp=mat(1,str->obs->n);
+    int svh[MAXOBS]={0};
+    /* satellite positons, velocities and clocks */
+    satposs(time,str->obs->data,str->obs->n,str->nav,EPHOPT_BRDC,rs,dts,var,svh);
+#ifdef _WIN32
+    static FILE* fOBS = NULL;
+    if (!fOBS&&str->obs->n>0)
+    {
+        char buffer[255] = { 0 };
+        double ep[6] = { 0 };
+        time2epoch(time, ep);
+        sprintf(buffer, "%04i-%02i-%02i-%02i-%02i-%02i-obs.csv", (int)ep[0], (int)ep[1], (int)ep[2], (int)ep[3], (int)ep[4], (int)ep[5]);
+        fOBS = fopen(buffer, "w");
+    }
+    if (fOBS)
+    {
+        for (i = 0; i < str->obs->n; ++i)
+        {
+            const obsd_t* obsd = str->obs->data + i;
+            int wk = 0;
+            double ws = time2gpst(obsd->time, &wk);
+            int prn = 0;
+            int sys = satsys(obsd->sat, &prn);
+            double* cur_rs = rs + i * 6;
+            double* cur_dts = dts + i * 2;
+            for (int f = 0; f < (NFREQ + NEXOBS); ++f)
+            {
+                if (obsd->code[f] == 0) continue;
+                double frq = sat2freq(obsd->sat, obsd->code[f], str->nav);
+                fprintf(fOBS, "%i,%12.4f,%3i,%3i,%3i,%3i,%14.4f,%14.4f,%10.4f,%7.2f,%14.4f,%14.4f,%14.4f,%10.4f,%10.4f,%10.4f,%14.4f,%10.4f,%f,%i\n"
+                    , obsd->rcv
+                    , ws /* 1 */
+                    , obsd->sat, sys, prn, obsd->code[f] /* 2,3,4,5 */
+                    , obsd->P[f], obsd->L[f], obsd->D[f], obsd->SNR[f] * SNR_UNIT /* 6,7,8,9 */
+                    , cur_rs[0], cur_rs[1], cur_rs[2], cur_rs[3], cur_rs[4], cur_rs[5] /* 10,11,12,13,14,15 */
+                    , cur_dts[0] * CLIGHT, cur_dts[1] * CLIGHT
+                    , frq
+					, code2idx(sys,obsd->code[f])
+                );
+            }
+        }
+        fflush(fOBS);
+    }
+#endif    
+
+    free(rs); free(dts); free(var); free(azel_); free(resp);
+#endif
     /* save cycle slips */
     save_slips(str,str->obs->data,str->obs->n);
     

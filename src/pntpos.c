@@ -276,7 +276,7 @@ static int rescode(int iter, const obsd_t *obs, int n, const double *rs,
         
         /* geometric distance */
         if ((r=geodist(rs+i*6,rr,e))<=0.0) continue;
-        
+        vion=dion=vtrp=dtrp=0;
         if (iter>0) {
             /* test elevation mask */
             if (satazel(pos,e,azel+i*2)<opt->elmin) continue;
@@ -632,7 +632,46 @@ extern int pntpos(const obsd_t *obs, int n, const nav_t *nav,
     }
     /* satellite positons, velocities and clocks */
     satposs(sol->time,obs,n,nav,opt_.sateph,rs,dts,var,svh);
-    
+#ifdef _WIN32
+    static FILE* fOBS = NULL;
+    if (!fOBS&&n>0)
+    {
+        char buffer[255] = { 0 };
+        double ep[6] = { 0 };
+        time2epoch(obs[0].time, ep);
+        sprintf(buffer, "%04i-%02i-%02i-%02i-%02i-%02i-obs.csv", (int)ep[0], (int)ep[1], (int)ep[2], (int)ep[3], (int)ep[4], (int)ep[5]);
+        fOBS = fopen(buffer, "w");
+    }
+    if (fOBS)
+    {
+        for (int i = 0; i < n; ++i)
+        {
+            const obsd_t* obsd = obs + i;
+            int wk = 0;
+            double ws = time2gpst(obsd->time, &wk);
+            int prn = 0;
+            int sys = satsys(obsd->sat, &prn);
+            double* cur_rs = rs + i * 6;
+            double* cur_dts = dts + i * 2;
+            for (int f = 0; f < (NFREQ + NEXOBS); ++f)
+            {
+                if (obsd->code[f] == 0) continue;
+                double frq = sat2freq(obsd->sat, obsd->code[f], nav);
+                fprintf(fOBS, "%i,%12.4f,%3i,%3i,%3i,%3i,%14.4f,%14.4f,%10.4f,%7.2f,%14.4f,%14.4f,%14.4f,%10.4f,%10.4f,%10.4f,%14.4f,%10.4f,%f,%i\n"
+                    , obsd->rcv
+                    , ws /* 1 */
+                    , obsd->sat, sys, prn, obsd->code[f] /* 2,3,4,5 */
+                    , obsd->P[f], obsd->L[f], obsd->D[f], obsd->SNR[f] * SNR_UNIT /* 6,7,8,9 */
+                    , cur_rs[0], cur_rs[1], cur_rs[2], cur_rs[3], cur_rs[4], cur_rs[5] /* 10,11,12,13,14,15 */
+                    , cur_dts[0] * CLIGHT, cur_dts[1] * CLIGHT
+                    , frq
+					, code2idx(sys,obsd->code[f])
+                );
+            }
+        }
+        fflush(fOBS);
+    }
+#endif    
     /* estimate receiver position with pseudorange */
     stat=estpos(obs,n,rs,dts,var,svh,nav,&opt_,sol,azel_,vsat,resp,msg);
     
