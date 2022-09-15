@@ -192,7 +192,7 @@ typedef struct
 
 static epoch_t gEpoch = { 0 };
 
-static char sy2char(int sys)
+static char sys2char(int sys)
 {
     if (sys == SYS_GPS) return 'G';
     else if (sys == SYS_GLO) return 'R';
@@ -209,11 +209,17 @@ static char sy2char(int sys)
 
 static int smooth_obs_data(obs_t *obs, nav_t *nav)
 {
-    uint8_t i = 0, j = 0, f = 0;
+	int prn = 0, wk = 0;
+    uint8_t i = 0, j = 0, f = 0, sys = 0, idx = 0, isCS_L1 = 0, isCS_L2 = 0, isCS_L5 = 0, ms_jump_int = 0;
     epoch_t* epoch = &gEpoch;
     obsd_t* obst = obs->data + i;
     obsd_t* obsf = epoch->data + j;
-    double dt = 0;
+    double dt = 0, ws = 0, L1_cur = 0, L1_pre = 0, L2_cur = 0, L2_pre = 0, L5_cur = 0, L5_pre = 0, waveL1 = 0, waveL2 = 0, waveL5 = 0, frq = 0, wave = 0;
+	double ion_diff = 0, dL1 = 0, dL2 = 0, dL5 = 0;
+	double f1_fL1 = 0, f2_fL1 = 0, f5_fL1 = 0, f_fL1 = 0;
+	double beta1 = 0, beta2 = 0, beta5 = 0, beta = 0;
+	double ion_cur = 0, ion_pre = 0, dion = 0;
+	double predictP = 0, alpha = 0, ms_jump = 0;
     if (obs->n == 0) return 0;
     for (j = 0, obsf = epoch->data + j; j < epoch->n; ++j, ++obsf)
     {
@@ -261,25 +267,25 @@ static int smooth_obs_data(obs_t *obs, nav_t *nav)
         }
         else
         {
-            int prn = 0;
-            int sys = satsys(obst->sat, &prn);
-            int wk = 0;
-            double ws = time2gpst(obst->time, &wk);
-            double L1_cur = 0;
-            double L2_cur = 0;
-            double L5_cur = 0;
-            double L1_pre = 0;
-            double L2_pre = 0;
-            double L5_pre = 0;
-            double waveL1 = 0;
-            double waveL2 = 0;
-            double waveL5 = 0;
+            prn = 0;
+            sys = satsys(obst->sat, &prn);
+            wk = 0;
+            ws = time2gpst(obst->time, &wk);
+            L1_cur = 0;
+            L2_cur = 0;
+            L5_cur = 0;
+            L1_pre = 0;
+            L2_pre = 0;
+            L5_pre = 0;
+            waveL1 = 0;
+            waveL2 = 0;
+            waveL5 = 0;
             for (f = 0; f < (NFREQ + NEXOBS); ++f)
             {
                 if (obst->code[f] == 0) continue;
-                int prn = 0;
-                int idx = code2idx(sys, obst->code[f]);
-                double frq = sat2freq(obst->sat, obst->code[f], nav);
+                prn = 0;
+                idx = code2idx(sys, obst->code[f]);
+                frq = sat2freq(obst->sat, obst->code[f], nav);
                 if (frq < 0.01) continue;
 
                 if (idx == 0)
@@ -301,26 +307,26 @@ static int smooth_obs_data(obs_t *obs, nav_t *nav)
                     waveL5 = CLIGHT / frq;
                 }
             }
-            int isCS_L1 = 1;
-            int isCS_L2 = 1;
-            int isCS_L5 = 1;
-            double ion_diff = 0;
-            double dL1 = 0;
-            double dL2 = 0;
-            double dL5 = 0;
-            double f1_fL1 = waveL1 / WAVE_GPS_L1;
-            double f2_fL1 = waveL2 / WAVE_GPS_L1;
-            double f5_fL1 = waveL5 / WAVE_GPS_L1;
-            double beta1 = f1_fL1 * f1_fL1;
-            double beta2 = f2_fL1 * f2_fL1;
-            double beta5 = f5_fL1 * f5_fL1;
+            isCS_L1 = 1;
+            isCS_L2 = 1;
+            isCS_L5 = 1;
+            ion_diff = 0;
+            dL1 = 0;
+            dL2 = 0;
+            dL5 = 0;
+            f1_fL1 = waveL1 / WAVE_GPS_L1;
+            f2_fL1 = waveL2 / WAVE_GPS_L1;
+            f5_fL1 = waveL5 / WAVE_GPS_L1;
+            beta1 = f1_fL1 * f1_fL1;
+            beta2 = f2_fL1 * f2_fL1;
+            beta5 = f5_fL1 * f5_fL1;
             if (waveL1 > 0.01 && waveL2 > 0.01 && fabs(L1_cur) > 0.001 && fabs(L1_pre) > 0.001 && fabs(L2_cur) > 0.001 && fabs(L2_pre) > 0.001)
             {
                 /* L1 + L2 */
-                double ion_cur = waveL1 * L1_cur - waveL2 * L2_cur;
-                double ion_pre = waveL1 * L1_pre - waveL2 * L2_pre;
-                double dion = (ion_cur - ion_pre) / (beta1 - beta2);
-                //printf("%10.3f,%c%2i,%3i,%10.4f,L1+L2\n", ws, sy2char(sys), prn, obst->sat, dion);
+                ion_cur = waveL1 * L1_cur - waveL2 * L2_cur;
+                ion_pre = waveL1 * L1_pre - waveL2 * L2_pre;
+                dion = (ion_cur - ion_pre) / (beta1 - beta2);
+                /*printf("%10.3f,%c%2i,%3i,%10.4f,L1+L2\n", ws, sys2char(sys), prn, obst->sat, dion);*/
                 if (fabs(dion) > 0.05)
                 {
                     isCS_L1 = 1;
@@ -338,10 +344,10 @@ static int smooth_obs_data(obs_t *obs, nav_t *nav)
             if (waveL1 > 0.01 && waveL5 > 0.01 && fabs(L1_cur) > 0.001 && fabs(L1_pre) > 0.001 && fabs(L5_cur) > 0.001 && fabs(L5_pre) > 0.001)
             {
                 /* L1 + L5 */
-                double ion_cur = waveL1 * L1_cur - waveL5 * L5_cur;
-                double ion_pre = waveL1 * L1_pre - waveL5 * L5_pre;
-                double dion = (ion_cur - ion_pre) / (beta1 - beta5);
-                //printf("%10.3f,%c%2i,%3i,%10.4f,%10.4f,%10.4f,L1+L5\n", ws, sy2char(sys), prn, obst->sat, dion, ion_cur, ion_pre);
+                ion_cur = waveL1 * L1_cur - waveL5 * L5_cur;
+                ion_pre = waveL1 * L1_pre - waveL5 * L5_pre;
+                dion = (ion_cur - ion_pre) / (beta1 - beta5);
+                /*printf("%10.3f,%c%2i,%3i,%10.4f,%10.4f,%10.4f,L1+L5\n", ws, sys2char(sys), prn, obst->sat, dion, ion_cur, ion_pre);*/
                 if (fabs(dion) > 0.05)
                 {
                     isCS_L1 = 1;
@@ -395,17 +401,17 @@ static int smooth_obs_data(obs_t *obs, nav_t *nav)
                 for (f = 0; f < (NFREQ + NEXOBS); ++f)
                 {
                     if (obst->code[f] == 0) continue;
-                    int prn = 0;
-                    int idx = code2idx(sys, obst->code[f]);
-                    double frq = sat2freq(obst->sat, obst->code[f], nav);
+                    prn = 0;
+                    idx = code2idx(sys, obst->code[f]);
+                    frq = sat2freq(obst->sat, obst->code[f], nav);
                     if (frq < 0.01) continue;
-                    double wave = CLIGHT / frq;
-                    double f_fL1 = wave / WAVE_GPS_L1;
-                    double beta = f_fL1 * f_fL1;
+                    wave = CLIGHT / frq;
+                    f_fL1 = wave / WAVE_GPS_L1;
+                    beta = f_fL1 * f_fL1;
                     if (fabs(obst->P[f]) > 0.001 && fabs(obsf->P[f]) > 0.001)
                     {
-                        double predictP = obsf->P[f];
-                        double alpha = 0;
+                        predictP = obsf->P[f];
+                        alpha = 0;
                         if (!isCS_L5)
                         {
                             predictP += dL5 + beta5 * ion_diff + beta * ion_diff;
@@ -423,8 +429,8 @@ static int smooth_obs_data(obs_t *obs, nav_t *nav)
                         }
                         else
                             continue;
-                        double ms_jump = (predictP - obst->P[f])*1000.0/CLIGHT;
-                        int ms_jump_int = (int)floor(ms_jump + 0.5);
+                        ms_jump = (predictP - obst->P[f])*1000.0/CLIGHT;
+                        ms_jump_int = (int)floor(ms_jump + 0.5);
                         if (ms_jump_int != 0)
                         {
                             predictP -= ms_jump_int * CLIGHT / 1000.0;
@@ -434,7 +440,8 @@ static int smooth_obs_data(obs_t *obs, nav_t *nav)
                 }
             }
             *obsf = *obst;
-            //printf("%10.3f,%c%2i,%3i,%i,%i\n", ws, sy2char(sys), prn, obst->sat, epoch->numofL1[j], epoch->numofL5[j]);
+            /*printf("%10.3f,%c%2i,%3i,%i,%i\n", ws, sys2char(sys), prn, obst->sat, epoch->numofL1[j], epoch->numofL5[j]);*/
+
         }
     }
     return epoch->n;
