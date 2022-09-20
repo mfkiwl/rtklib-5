@@ -125,7 +125,8 @@ static const char *help[]={
 "     -hd delta    rinex header: antenna delta h/e/n separated by /",
 "     -v ver       rinex version [3.04]",
 "     -omsm        output rtcm msm message => 0 -> off; 4 -> msm4; 7 -> msm7",
-"     -csmooth     turn on code smooth using carrier phase",
+"     -csmooth     turn on code smooth using carrier phase => 0 -> off; 1 -> on",
+"     -qc          turn on code smooth using carrier phase => 0 -> off; 1 -> on",
 "     -od          include doppler frequency in rinex obs [on]",
 "     -os          include snr in rinex obs [on]",
 "     -oi          include iono correction in rinex nav header [off]",
@@ -396,6 +397,7 @@ static int cmdopts(int argc, char **argv, rnxopt_t *opt, char **ifile,
     
     opt->outmsm=0;
     opt->csmooth=0;
+    opt->qc=0;
     opt->rnxver=304;
     opt->obstype=OBSTYPE_PR|OBSTYPE_CP;
     opt->navsys=SYS_GPS|SYS_GLO|SYS_GAL|SYS_QZS|SYS_SBS|SYS_CMP|SYS_IRN;
@@ -486,6 +488,9 @@ static int cmdopts(int argc, char **argv, rnxopt_t *opt, char **ifile,
         }
         else if (!strcmp(argv[i],"-csmooth" )&&i+1<argc) {
             opt->csmooth=atoi(argv[++i]);
+        }
+        else if (!strcmp(argv[i],"-qc" )&&i+1<argc) {
+            opt->qc=atoi(argv[++i]);
         }
         else if (!strcmp(argv[i],"-od")) {
             opt->obstype|=OBSTYPE_DOP;

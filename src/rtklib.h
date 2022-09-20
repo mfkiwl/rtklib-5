@@ -1061,6 +1061,7 @@ typedef struct {        /* RINEX options type */
     int rnxver;         /* RINEX version (x100) */
     int outmsm;         /* output msm */
     int csmooth;        /* code smooth */
+    int qc;             /* quality control */
     int navsys;         /* navigation system */
     int obstype;        /* observation type */
     int freqtype;       /* frequency type */
