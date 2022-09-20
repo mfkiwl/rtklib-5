@@ -110,6 +110,11 @@ static double locktime_d(gtime_t time, gtime_t *lltime, uint8_t LLI)
     if (!lltime->time||(LLI&1)) *lltime=time;
     return timediff(time,*lltime);
 }
+/* default glonass frequency table, same table also in rtcm.c, try to keep it self contained, can merage into one table */
+static int default_glo_frq_table[] = { 1, -4, 05, 06, 01, -4, 05, 06, -2, -7, 00, -1, -2, -7, 00, -1, 04, -3, 03, 02, 04, -3, 03, 02, 0, -5 };
+#ifndef MAX_GLO_PRN
+#define MAX_GLO_PRN (sizeof(default_glo_frq_table)/sizeof(int))
+#endif
 /* GLONASS frequency channel number in RTCM (FCN+7,-1:error) -----------------*/
 static int fcn_glo(int sat, rtcm_t *rtcm)
 {
@@ -121,9 +126,11 @@ static int fcn_glo(int sat, rtcm_t *rtcm)
     if (rtcm->nav.geph[prn-1].sat==sat) {
         return rtcm->nav.geph[prn-1].frq+7;
     }
-    if (rtcm->nav.glo_fcn[prn-1]>0) { /* fcn+8 (0: no data) */
+    else if (rtcm->nav.glo_fcn[prn-1]>0) { /* fcn+8 (0: no data) */
         return rtcm->nav.glo_fcn[prn-1]-8+7;
-    }
+    } else if (prn<=MAX_GLO_PRN&&prn>0) {
+		return default_glo_frq_table[prn-1]+7;
+	}
     return -1;
 }
 /* lock time indicator (ref [17] table 3.4-2) --------------------------------*/
@@ -2009,7 +2016,8 @@ static void gen_msm_sig(rtcm_t *rtcm, int sys, int nsat, int nsig, int ncell,
             /* subtract phase - psudorange integer cycle offset */
             LLI=data->LLI[j];
             if ((LLI&1)||fabs(phrng_s-rtcm->cp[data->sat-1][j])>1171.0) {
-                rtcm->cp[data->sat-1][j]=ROUND(phrng_s/lambda)*lambda;
+                if (fabs(rtcm->cp[data->sat-1][j])>0.001) /* only add the ambiguity offset when the phase range residual is too big */
+                    rtcm->cp[data->sat-1][j]=ROUND(phrng_s/lambda)*lambda;
                 LLI|=1;
             }
             phrng_s-=rtcm->cp[data->sat-1][j];
