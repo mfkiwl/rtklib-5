@@ -46,7 +46,7 @@
 *-----------------------------------------------------------------------------*/
 #include "rtklib.h"
 
-#define NOUTFILE        9       /* number of output files */
+#define NOUTFILE       10       /* number of output files */
 #define NSATSYS         7       /* number of satellite systems */
 #define TSTARTMARGIN    60.0    /* time margin for file name replacement */
 
@@ -80,6 +80,7 @@ typedef struct {                /* stream file type */
     nav_t  *nav;                /* pointer to input navigation data */
     sta_t  *sta;                /* pointer to input station parameters */
     rtcm_t rtcm;                /* input RTCM data */
+    rtcm_t out;                 /* output RTCM data */
     raw_t  raw;                 /* input receiver raw data */
     rnxctr_t rnx;               /* input RINEX control data */
     stas_t *stas;               /* station list */
@@ -158,7 +159,11 @@ static strfile_t *gen_strfile(int format, const char *opt)
     str->staid=-1;
     str->ephsat=str->ephset=0;
     str->time=str->tstart=time0;
-    
+    /* output rtcm */
+    if (!init_rtcm(&str->out)) {
+        showmsg("init rtcm error");
+        return 0;
+    }
     if (format==STRFMT_RTCM2||format==STRFMT_RTCM3) {
         if (!init_rtcm(&str->rtcm)) {
             showmsg("init rtcm error");
@@ -210,7 +215,9 @@ static void free_strfile(strfile_t *str)
     int i,j;
 
     trace(3,"free_strfile:\n");
-    
+    /* output rtcm */
+    free_rtcm(&str->out);
+
     if (str->format==STRFMT_RTCM2||str->format==STRFMT_RTCM3) {
         free_rtcm(&str->rtcm);
     }
@@ -861,7 +868,7 @@ static int openfile(FILE **ofp, char *files[], const char *file,
         /* create directory if not exist */
         createdir(path);
         
-        if (!(ofp[i]=fopen(path,"w"))) {
+        if (!(ofp[i]=fopen(path,(i+1)==NOUTFILE?"wb":"w"))) {
             showmsg("file open error: %s",path);
             for (i--;i>=0;i--) if (ofp[i]) fclose(ofp[i]);
             return 0;
@@ -1250,14 +1257,65 @@ static int smooth_obs_data(obs_t *obs, nav_t *nav)
     }
     return epoch->n;
 }
-
+/* write rtcm3 msm to stream -------------------------------------------------*/
+static void write_rtcm3_msm(rtcm_t *out, int msg, int sync, FILE *fOUT)
+{
+    obsd_t *data,buff[MAXOBS];
+    int i,j,n,ns,sys,nobs,code,nsat=0,nsig=0,nmsg,mask[MAXCODE]={0};
+    
+    if      (1071<=msg&&msg<=1077) sys=SYS_GPS;
+    else if (1081<=msg&&msg<=1087) sys=SYS_GLO;
+    else if (1091<=msg&&msg<=1097) sys=SYS_GAL;
+    else if (1101<=msg&&msg<=1107) sys=SYS_SBS;
+    else if (1111<=msg&&msg<=1117) sys=SYS_QZS;
+    else if (1121<=msg&&msg<=1127) sys=SYS_CMP;
+    else return;
+    
+    data=out->obs.data;
+    nobs=out->obs.n;
+    
+    /* count number of satellites and signals */
+    for (i=0;i<nobs&&i<MAXOBS;i++) {
+        if (satsys(data[i].sat,NULL)!=sys) continue;
+        nsat++;
+        for (j=0;j<NFREQ+NEXOBS;j++) {
+            if (!(code=data[i].code[j])||mask[code-1]) continue;
+            mask[code-1]=1;
+            nsig++;
+        }
+    }
+    if (nsig<=0||nsig>64) return;
+    
+    /* pack data to multiple messages if nsat x nsig > 64 */
+    ns=64/nsig;         /* max number of sats in a message */
+    nmsg=(nsat-1)/ns+1; /* number of messages */
+    
+    out->obs.data=buff;
+    
+    for (i=j=0;i<nmsg;i++) {
+        for (n=0;n<ns&&j<nobs&&j<MAXOBS;j++) {
+            if (satsys(data[j].sat,NULL)!=sys) continue;
+            out->obs.data[n++]=data[j];
+        }
+        out->obs.n=n;
+        
+        if (gen_rtcm3(out,msg,0,i<nmsg-1?1:sync)&& out->nbyte > 0 && fOUT != NULL) {
+            fwrite(out->buff, out->nbyte, sizeof(uint8_t), fOUT);
+        }
+    }
+    out->obs.data=data;
+    out->obs.n=nobs;
+}
 /* convert observation data --------------------------------------------------*/
 static void convobs(FILE **ofp, rnxopt_t *opt, strfile_t *str, int *n,
                     gtime_t *tend, int *staid)
 {
     gtime_t time;
     int i,j;
-    
+    int ng = 0, nr = 0, ne = 0, ns = 0, nj = 0, nc = 0, wk = 0;
+    obsd_t* obsd = str->obs->data + 0;
+    int sys = 0, prn = 0;
+
     trace(3,"convobs :\n");
     
     if (!ofp[0]||str->obs->n<=0) return;
@@ -1267,7 +1325,11 @@ static void convobs(FILE **ofp, rnxopt_t *opt, strfile_t *str, int *n,
     /* avoid duplicated data by multiple files handover */
     if (tend->time&&timediff(time,*tend)<opt->ttol) return;
     *tend=time;
-	smooth_obs_data(str->obs, str->nav);
+    /* code smooth */
+    if (opt->csmooth)
+    {
+        smooth_obs_data(str->obs, str->nav);
+    }
 #if 0
     double *rs=mat(6,str->obs->n),*dts=mat(2,str->obs->n),*var=mat(1,str->obs->n),*azel_=zeros(2,str->obs->n),*resp=mat(1,str->obs->n);
     int svh[MAXOBS]={0};
@@ -1345,6 +1407,42 @@ static void convobs(FILE **ofp, rnxopt_t *opt, strfile_t *str, int *n,
     /* output RINEX observation data */
     outrnxobsb(ofp[0],opt,str->obs->data,str->obs->n,0);
     
+    /* output rtcm */
+    if (opt->outmsm > 0 && opt->outmsm <= 7)
+    {
+        str->out.obs.n = 0;
+        str->out.time = str->out.time_s = str->time;
+        memset(str->out.buff, 0, sizeof(str->out.buff));
+        str->out.nbyte = str->out.len = str->out.nbit = 0;
+        for (i = 0, obsd = str->obs->data + i; i < str->obs->n; ++i, ++obsd)
+        {
+            sys = satsys(obsd->sat, &prn);
+            if (sys == SYS_GPS)
+                ++ng;
+            else if (sys == SYS_GLO)
+                ++nr;
+            else if (sys == SYS_GAL)
+                ++ne;
+            else if (sys == SYS_SBS)
+                ++ns;
+            else if (sys == SYS_QZS)
+                ++nj;
+            else if (sys == SYS_CMP)
+                ++nc;
+            else
+                continue;
+            str->out.obs.data[str->out.obs.n++] = *obsd;
+        }
+        if (ng > 0) write_rtcm3_msm(&str->out, 1070 + opt->outmsm, (nr + ne + ns + nj + nc) > 0, ofp[9]); /* GPS */
+        if (nr > 0) write_rtcm3_msm(&str->out, 1080 + opt->outmsm, (ne + ns + nj + nc) > 0, ofp[9]);/* GLO */
+        if (ne > 0) write_rtcm3_msm(&str->out, 1090 + opt->outmsm, (ns + nj + nc) > 0, ofp[9]); /* GAL */
+        if (ns > 0) write_rtcm3_msm(&str->out, 1100 + opt->outmsm, (nj + nc) > 0, ofp[9]); /* SBAS */
+        if (nj > 0) write_rtcm3_msm(&str->out, 1110 + opt->outmsm, nc > 0, ofp[9]); /* QZS */
+        if (nc > 0) write_rtcm3_msm(&str->out, 1120 + opt->outmsm, 0, ofp[9]); /* CMP */
+
+        if (ng > 0 || nr > 0 || ne > 0 || ns > 0 || nj > 0 || nc > 0) n[9]++;
+    }
+
     if (opt->tstart.time==0) opt->tstart=time;
     opt->tend=time;
     
@@ -1362,6 +1460,78 @@ static void convnav(FILE **ofp, rnxopt_t *opt, strfile_t *str, int *n)
     sat=str->ephsat;
     set=str->ephset;
     sys=satsys(sat,&prn);
+
+    /* output rtcm */
+    if (opt->outmsm > 0)
+    {
+        memset(str->out.buff, 0, sizeof(str->out.buff));
+        str->out.nbyte = str->out.len = str->out.nbit = 0;
+        str->out.ephsat = str->ephsat;
+        str->out.ephset = str->ephset;
+        if (sys == SYS_GPS)
+        {
+            str->out.nav.eph[str->out.ephsat - 1] = str->nav->eph[str->ephsat - 1];
+            gen_rtcm3(&str->out, 1019, 0, 0);
+            if (str->out.nbyte > 0 && ofp[9] != NULL)
+            {
+                fwrite(str->out.buff, str->out.nbyte, sizeof(char), ofp[9]);
+                n[9]++;
+            }
+        }
+        else if (sys == SYS_GLO)
+        {
+            str->out.nav.geph[prn - 1] = str->nav->geph[prn - 1];
+            gen_rtcm3(&str->out, 1020, 0, 0);
+            if (str->out.nbyte > 0 && ofp[9] != NULL)
+            {
+                fwrite(str->out.buff, str->out.nbyte, sizeof(char), ofp[9]);
+                n[9]++;
+            }
+        }
+        else if (sys == SYS_GAL)
+        {
+            if (str->ephset)
+            {
+                str->out.nav.eph[str->out.ephsat - 1 + MAXSAT] = str->nav->eph[str->ephsat - 1 + MAXSAT];
+                gen_rtcm3(&str->out, 1045, 0, 0);
+            }
+            else
+            {
+                str->out.nav.eph[str->out.ephsat - 1] = str->nav->eph[str->ephsat - 1];
+                gen_rtcm3(&str->out, 1046, 0, 0);
+            }
+            if (str->out.nbyte > 0 && ofp[9] != NULL)
+            {
+                fwrite(str->out.buff, str->out.nbyte, sizeof(char), ofp[9]);
+                n[9]++;
+            }
+        }
+        else if (sys == SYS_SBS)
+        {
+            sys = sys;
+        }
+        else if (sys == SYS_QZS)
+        {
+            str->out.nav.eph[str->out.ephsat - 1] = str->nav->eph[str->ephsat - 1];
+            gen_rtcm3(&str->out, 1044, 0, 0);
+            if (str->out.nbyte > 0 && ofp[9] != NULL)
+            {
+                fwrite(str->out.buff, str->out.nbyte, sizeof(char), ofp[9]);
+                n[9]++;
+            }
+        }
+        else if (sys == SYS_CMP)
+        {
+            str->out.nav.eph[str->out.ephsat - 1] = str->nav->eph[str->ephsat - 1];
+            gen_rtcm3(&str->out, 1042, 0, 0);
+            if (str->out.nbyte > 0 && ofp[9] != NULL)
+            {
+                fwrite(str->out.buff, str->out.nbyte, sizeof(char), ofp[9]);
+                n[9]++;
+            }
+        }
+    }
+
     if (!(sys&opt->navsys)||opt->exsats[sat-1]) return;
     
     switch (sys) {
@@ -1476,9 +1646,9 @@ static void convsbs(FILE **ofp, rnxopt_t *opt, strfile_t *str, int *n,
     if (!(sat=satno(sys,prn))||opt->exsats[sat-1]==1) return;
     
     /* output SBAS message log */
-    if (ofp[NOUTFILE-1]) {
-        sbsoutmsg(ofp[NOUTFILE-1],&str->raw.sbsmsg);
-        n[NOUTFILE-1]++;
+    if (ofp[NOUTFILE-2]) {
+        sbsoutmsg(ofp[NOUTFILE-2],&str->raw.sbsmsg);
+        n[NOUTFILE-2]++;
     }
     /* output SBAS ephemeris */
     if ((opt->navsys&SYS_SBS)&&sbsupdatecorr(&str->raw.sbsmsg,str->nav)==9) {
@@ -1608,7 +1778,6 @@ static int convrnx_s(int sess, int format, rnxopt_t *opt, const char *file,
         return 0;
     }
     str->time=str->tstart;
-    
     for (i=0;i<nf&&!abort;i++) {
         if (!mask[i]) continue;
         
@@ -1628,6 +1797,20 @@ static int convrnx_s(int sess, int format, rnxopt_t *opt, const char *file,
                 case  1: convobs(ofp,opt,str,n,tend,&staid); break;
                 case  2: convnav(ofp,opt,str,n); break;
                 case  3: convsbs(ofp,opt,str,n,tend+1); break;
+                case  5: {
+                    if (opt->outmsm > 0 && opt->outmsm <= 7)
+                    {
+                        memset(str->out.buff, 0, sizeof(str->out.buff));
+                        str->out.nbyte = str->out.len = str->out.nbit = 0;
+                        str->out.sta = *str->sta;
+                        gen_rtcm3(&str->out, 1005, 0, 0);
+                        if (str->out.nbyte > 0 && ofp[9] != NULL)
+                        {
+                            fwrite(str->out.buff, str->out.nbyte, sizeof(uint8_t), ofp[9]);
+                            n[9]++;
+                        }
+                    }
+                }
                 case -1: n[NOUTFILE]++; break; /* error */
             }
             /* set approx position in rinex option */
@@ -1671,6 +1854,7 @@ static int convrnx_s(int sess, int format, rnxopt_t *opt, const char *file,
 *                               ofile[6] RINEX CNAV file  ("": no output)
 *                               ofile[7] RINEX INAV file  ("": no output)
 *                               ofile[8] SBAS log file    ("": no output)
+*                               ofile[9] rtcm log file    ("": no output)
 * return : status (1:ok,0:error,-1:abort)
 * notes  : the following members of opt are replaced by information in last
 *          converted RINEX: opt->tstart, opt->tend, opt->obstype, opt->nobs
@@ -1685,9 +1869,9 @@ extern int convrnx(int format, rnxopt_t *opt, const char *file, char **ofile)
     double tu,ts;
     int i,week,stat=1,sys_GRS=SYS_GPS|SYS_GLO|SYS_SBS;
     
-    trace(3,"convrnx: format=%d file=%s ofile=%s %s %s %s %s %s %s %s %s\n",
+    trace(3,"convrnx: format=%d file=%s ofile=%s %s %s %s %s %s %s %s %s %s\n",
           format,file,ofile[0],ofile[1],ofile[2],ofile[3],ofile[4],ofile[5],
-          ofile[6],ofile[7],ofile[8]);
+          ofile[6],ofile[7],ofile[8],ofile[9]);
     
     showmsg("");
     

@@ -1059,6 +1059,8 @@ typedef struct {        /* RINEX options type */
     double ttol;        /* time tolerance (s) */
     double tunit;       /* time unit for multiple-session (s) */
     int rnxver;         /* RINEX version (x100) */
+    int outmsm;         /* output msm */
+    int csmooth;        /* code smooth */
     int navsys;         /* navigation system */
     int obstype;        /* observation type */
     int freqtype;       /* frequency type */

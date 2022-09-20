@@ -53,7 +53,7 @@
 
 #define PRGNAME   "CONVBIN"
 #define TRACEFILE "convbin.trace"
-#define NOUTFILE        9       /* number of output files */
+#define NOUTFILE       10       /* number of output files */
 
 /* help text -----------------------------------------------------------------*/
 static const char *help[]={
@@ -124,6 +124,8 @@ static const char *help[]={
 "     -hp pos      rinex header: approx position x/y/z separated by /",
 "     -hd delta    rinex header: antenna delta h/e/n separated by /",
 "     -v ver       rinex version [3.04]",
+"     -omsm        output rtcm msm message => 0 -> off; 4 -> msm4; 7 -> msm7",
+"     -csmooth     turn on code smooth using carrier phase",
 "     -od          include doppler frequency in rinex obs [on]",
 "     -os          include snr in rinex obs [on]",
 "     -oi          include iono correction in rinex nav header [off]",
@@ -191,7 +193,7 @@ static int convbin(int format, rnxopt_t *opt, const char *ifile, char **file,
                    char *dir)
 {
     int i,def;
-    static char work[1024],ofile_[NOUTFILE][1024]={"","","","","","","","",""};
+    static char work[1024],ofile_[NOUTFILE][1024]={"","","","","","","","","",""};
     char ifile_[1024],*ofile[NOUTFILE],*p;
     char *extnav=(opt->rnxver<=299||opt->navsys==SYS_GPS)?"N":"P";
     char *extlog="sbs";
@@ -201,7 +203,7 @@ static int convbin(int format, rnxopt_t *opt, const char *ifile, char **file,
     for (p=ifile_;*p;p++) if (*p=='*') *p='0';
 
     def=!file[0]&&!file[1]&&!file[2]&&!file[3]&&!file[4]&&!file[5]&&!file[6]&&
-        !file[7]&&!file[8];
+        !file[7]&&!file[8]&&!file[9];
     
     for (i=0;i<NOUTFILE;i++) ofile[i]=ofile_[i];
     
@@ -289,6 +291,12 @@ static int convbin(int format, rnxopt_t *opt, const char *ifile, char **file,
         else strcat(ofile[8],".");
         strcat(ofile[8],extlog);
     }
+    if (file[9]) strcpy(ofile[9],file[9]);
+    else if (def) {
+        strcpy(ofile[9],ifile_);
+        if ((p=strrchr(ofile[9],'.'))) p[0]='-';
+        strcat(ofile[9],".rtcm3");
+    }
     for (i=0;i<NOUTFILE;i++) {
         if (!*dir||!*ofile[i]) continue;
         if ((p=strrchr(ofile[i],FILEPATHSEP))) strcpy(work,p+1);
@@ -306,6 +314,7 @@ static int convbin(int format, rnxopt_t *opt, const char *ifile, char **file,
     if (*ofile[6]) fprintf(stderr,"->rinex cnav: %s\n",ofile[6]);
     if (*ofile[7]) fprintf(stderr,"->rinex inav: %s\n",ofile[7]);
     if (*ofile[8]) fprintf(stderr,"->sbas log  : %s\n",ofile[8]);
+    if (*ofile[9]) fprintf(stderr,"->rtcm3 log : %s\n",ofile[9]);
     
     if (!convrnx(format,opt,ifile,ofile)) {
         fprintf(stderr,"\n");
@@ -385,6 +394,8 @@ static int cmdopts(int argc, char **argv, rnxopt_t *opt, char **ifile,
     int i,j,k,sat,nf=5,nc=2,format=-1;
     char *p,*sys,*fmt="",*paths[1],path[1024],buff[256];
     
+    opt->outmsm=0;
+    opt->csmooth=0;
     opt->rnxver=304;
     opt->obstype=OBSTYPE_PR|OBSTYPE_CP;
     opt->navsys=SYS_GPS|SYS_GLO|SYS_GAL|SYS_QZS|SYS_SBS|SYS_CMP|SYS_IRN;
@@ -393,18 +404,18 @@ static int cmdopts(int argc, char **argv, rnxopt_t *opt, char **ifile,
     
     for (i=1;i<argc;i++) {
         if (!strcmp(argv[i],"-ts")&&i+2<argc) {
-            sscanf(argv[++i],"%lf/%lf/%lf",eps,eps+1,eps+2);
-            sscanf(argv[++i],"%lf:%lf:%lf",eps+3,eps+4,eps+5);
+            k=sscanf(argv[++i],"%lf/%lf/%lf",eps,eps+1,eps+2);
+            k=sscanf(argv[++i],"%lf:%lf:%lf",eps+3,eps+4,eps+5);
             opt->ts=epoch2time(eps);
         }
         else if (!strcmp(argv[i],"-te")&&i+2<argc) {
-            sscanf(argv[++i],"%lf/%lf/%lf",epe,epe+1,epe+2);
-            sscanf(argv[++i],"%lf:%lf:%lf",epe+3,epe+4,epe+5);
+            k=sscanf(argv[++i],"%lf/%lf/%lf",epe,epe+1,epe+2);
+            k=sscanf(argv[++i],"%lf:%lf:%lf",epe+3,epe+4,epe+5);
             opt->te=epoch2time(epe);
         }
         else if (!strcmp(argv[i],"-tr")&&i+2<argc) {
-            sscanf(argv[++i],"%lf/%lf/%lf",epr,epr+1,epr+2);
-            sscanf(argv[++i],"%lf:%lf:%lf",epr+3,epr+4,epr+5);
+            k=sscanf(argv[++i],"%lf/%lf/%lf",epr,epr+1,epr+2);
+            k=sscanf(argv[++i],"%lf:%lf:%lf",epr+3,epr+4,epr+5);
             opt->trtcm=epoch2time(epr);
         }
         else if (!strcmp(argv[i],"-ti")&&i+1<argc) {
@@ -469,6 +480,12 @@ static int cmdopts(int argc, char **argv, rnxopt_t *opt, char **ifile,
         }
         else if (!strcmp(argv[i],"-v" )&&i+1<argc) {
             opt->rnxver=(int)(atof(argv[++i])*100.0);
+        }
+        else if (!strcmp(argv[i],"-omsm" )&&i+1<argc) {
+            opt->outmsm=atoi(argv[++i]);
+        }
+        else if (!strcmp(argv[i],"-csmooth" )&&i+1<argc) {
+            opt->csmooth=atoi(argv[++i]);
         }
         else if (!strcmp(argv[i],"-od")) {
             opt->obstype|=OBSTYPE_DOP;
