@@ -207,9 +207,6 @@ static int read_nmea(const char* fname, std::vector<pvt_t>& vpvt)
 	unsigned long numofrtk = 0;
 	unsigned long numoffix = 0;
 	unsigned long numofdgps = 0;
-#ifdef _PLOT_
-	std::vector<double> lats, lons, lats_fix, lons_fix;
-#endif
 	char* val[MAXFIELD];
 	int data = 0;
 	while (fLOG != NULL && !feof(fLOG) && (data=fgetc(fLOG))!=EOF)
@@ -248,32 +245,10 @@ static int read_nmea(const char* fname, std::vector<pvt_t>& vpvt)
 		{
 			if (pvt.type == 4)
 			{
-#ifdef _PLOT_
-				if (!g_plot)
-				{
-					g_l2e = lat2local(pvt.lat, &g_l2n);
-					g_lat0 = pvt.lat;
-					g_lon0 = pvt.lon;
-					g_plot = 1;
-				}
-				lats_fix.push_back((pvt.lat-g_lat0)*g_l2n);
-				lons_fix.push_back((pvt.lon-g_lon0)*g_l2e);
-#endif
 				++numoffix;
 			}
 			++numofrtk;
 		}
-#ifdef _PLOT_
-		if (!g_plot)
-		{
-			g_l2e = lat2local(pvt.lat, &g_l2n);
-			g_lat0 = pvt.lat;
-			g_lon0 = pvt.lon;
-			g_plot = 1;
-		}
-		lats.push_back((pvt.lat - g_lat0) * g_l2n);
-		lons.push_back((pvt.lon - g_lon0) * g_l2e);
-#endif
 		vpvt.push_back(pvt);
 		if (!fCSV) fCSV = set_output_file(fname, "-gps.csv");
 		if (fCSV)
@@ -281,11 +256,6 @@ static int read_nmea(const char* fname, std::vector<pvt_t>& vpvt)
 			fprintf(fCSV, "%10.3f,%14.9f,%14.9f,%10.4f,%i,%i\n", pvt.time, pvt.lat * R2D, pvt.lon * R2D, pvt.ht, pvt.nsat, pvt.type);
 		}
 	}
-#ifdef _PLOT_
-	plt::plot(lons, lats,".");
-	plt::plot(lons_fix, lats_fix,".");
-	plt::grid(true);
-#endif
 	if (fLOG) fclose(fLOG);
 	if (fCSV) fclose(fCSV);
 	printf("%6i,%6i,%6i,%6i,%6i,%7.3f,%s\n", numofline, numofspp, numofdgps, numofrtk, numoffix, numofrtk > 0 ? 100.0 * numoffix / numofrtk : 0, fname);
@@ -336,25 +306,105 @@ static int sol_diff(const char* fname, std::vector<pvt_t>& pvt1, std::vector<pvt
 	return numofmatch;
 }
 
-static int test_plot()
+static void plot_sol(std::vector<pvt_t>& pvt)
 {
-	std::vector<double> t(1000);
-	std::vector<double> x(t.size());
-
-	for (size_t i = 0; i < t.size(); i++) {
-		t[i] = i / 100.0;
-		x[i] = sin(2.0 * PI * 1.0 * t[i]);
+#ifdef _PLOT_
+	size_t i = 0, numoffix = 0, numofsol = 0;
+	double lat0_fix = 0, lon0_fix = 0, ht0_fix = 0;
+	double lat0 = 0, lon0 = 0, ht0 = 0;
+	for (; i < pvt.size(); ++i)
+	{
+		if (pvt[i].type == 0) continue;
+		if (pvt[i].type == 4)
+		{
+			++numoffix;
+			lat0_fix += pvt[i].lat;
+			lon0_fix += pvt[i].lon;
+			ht0_fix += pvt[i].ht;
+		}
+		++numofsol;
+		lat0 += pvt[i].lat;
+		lon0 += pvt[i].lon;
+		ht0 += pvt[i].ht;
 	}
+	if (numoffix > 0)
+	{
+		lat0_fix /= numoffix;
+		lon0_fix /= numoffix;
+		ht0_fix /= numoffix;
+		if (!g_plot)
+		{
+			g_l2e = lat2local(lat0_fix, &g_l2n);
+			g_lat0 = lat0_fix;
+			g_lon0 = lon0_fix;
+			g_plot = 1;
+		}
+	}
+	if (numofsol > 0)
+	{
+		lat0 /= numofsol;
+		lon0 /= numofsol;
+		ht0 /= numofsol;
+		if (!g_plot)
+		{
+			g_l2e = lat2local(lat0, &g_l2n);
+			g_lat0 = lat0;
+			g_lon0 = lon0;
+			g_plot = 1;
+		}
+	}
+	if (g_plot)
+	{
+		std::vector<double> x, y, x_fix, y_fix;
+		double sn = 0, se = 0, sn_fix = 0, se_fix = 0;
+		numoffix = 0;
+		for (i = 0; i < pvt.size(); ++i)
+		{
+			double de = (pvt[i].lon - g_lon0) * g_l2e;
+			double dn = (pvt[i].lat - g_lat0) * g_l2n;
+			sn += dn * dn;
+			se += de * de;
+			x.push_back(de);
+			y.push_back(dn);
+			if (pvt[i].type == 4)
+			{
+				x_fix.push_back(de);
+				y_fix.push_back(dn);
+				sn_fix += dn * dn;
+				se_fix += de * de;
+				++numoffix;
+			}
+		}
+		if (numoffix > 0)
+		{
+			sn_fix = sqrt(sn_fix / numoffix);
+			se_fix = sqrt(se_fix / numoffix);
+		}
+		if (pvt.size() > 0)
+		{
+			sn = sqrt(sn / pvt.size());
+			se = sqrt(se / pvt.size());
+		}
 
-	plt::xkcd();
-	plt::plot(t, x);
-	plt::title("AN ORDINARY SIN WAVE");
-	plt::save("xkcd.png");
-	return 0;
+		char fix_title[255];
+		char flt_title[255];
+		sprintf(fix_title, "std=%7.3f,%7.3f FIX", sn_fix, se_fix);
+		sprintf(flt_title, "std=%7.3f,%7.3f RTK", sn, se);
+		plt::named_plot(flt_title, x, y, ".");
+		plt::named_plot(fix_title, x_fix, y_fix, ".");
+		plt::grid(true);
+		plt::xlabel("East /Longitude [m]");
+		plt::ylabel("North/Laitude   [m]");
+		plt::title("Groud Track");
+		plt::legend();
+		plt::show();
+	}
+#endif
 }
-/* need to install matplotlib-cpp at upper directory https://github.com/lava/matplotlib-cpp.git */
+
+/* need to install matplotlib-cpp at upper directory https://github.com/yydgis/matplotlib-cpp.git */
 /* need to install python and add the path => normally go to cmd, and use path command to locate the python path, for example C:\Users\xxx\AppData\Local\Programs\Python\Python310 */
-/* need to install numpy and add the path for example, C:\Users\xxx\AppData\Local\Programs\Python\Python310\Lib\site-packages\numpy\core\include */
+/* need to install numpy and add the path for example, C:\Users\yudan\AppData\Local\Programs\Python\Python310\Lib\site-packages\numpy\core\include */
 /* comment out some lines in matplotlibcpp.h about NPY_INT64, NPY_UINT64*/
 /* add python310.lib in the path and dependencies, note this only works for release build, need to find the python310_d.lib for debug version */
 int main(int argc, char** argv)
@@ -368,17 +418,14 @@ int main(int argc, char** argv)
 	if (argc < 3)
 	{
 		read_nmea(argv[1], vpvt1);
+		plot_sol(vpvt1);
 	}
 	else
 	{
 		read_nmea(argv[2], vpvt2);
+		plot_sol(vpvt2);
 		sol_diff(argv[1], vpvt1, vpvt2);
+		//plot_sol_diff(vpvt1,vpvt2);
 	}
-#ifdef _PLOT_
-	if (g_plot)
-	{
-		plt::show();
-	}
-#endif
 	return 0;
 }
