@@ -5,6 +5,20 @@
 #include <string>
 #include <algorithm>
 
+#define _PLOT_
+
+#ifdef _PLOT_
+#include "..\matplotlib-cpp\matplotlibcpp.h"
+
+namespace plt = matplotlibcpp;
+
+static int g_plot = 0;
+static double g_lat0 = 0;
+static double g_lon0 = 0;
+static double g_l2n = 0;
+static double g_l2e = 0;
+#endif
+
 #ifndef PI
 #define	PI 3.14159265358979
 #endif
@@ -164,6 +178,19 @@ static int add_buff(nmea_buff_t* buff, uint8_t data)
 	return ret;
 }
 
+double lat2local(double lat, double* lat2north)
+{
+	double f_WGS84 = (1.0 / finv_WGS84);
+	double e2WGS84 = (2.0 * f_WGS84 - f_WGS84 * f_WGS84);
+	double slat = sin(lat);
+	double clat = cos(lat);
+	double one_e2_slat2 = 1.0 - e2WGS84 * slat * slat;
+	double Rn = ae_WGS84 / sqrt(one_e2_slat2);
+	double Rm = Rn * (1.0 - e2WGS84) / (one_e2_slat2);
+	*lat2north = Rm;
+	return Rn * clat;
+}
+
 static int read_nmea(const char* fname, std::vector<pvt_t>& vpvt)
 {
 	FILE* fLOG = fopen(fname, "rb");
@@ -180,6 +207,9 @@ static int read_nmea(const char* fname, std::vector<pvt_t>& vpvt)
 	unsigned long numofrtk = 0;
 	unsigned long numoffix = 0;
 	unsigned long numofdgps = 0;
+#ifdef _PLOT_
+	std::vector<double> lats, lons, lats_fix, lons_fix;
+#endif
 	char* val[MAXFIELD];
 	int data = 0;
 	while (fLOG != NULL && !feof(fLOG) && (data=fgetc(fLOG))!=EOF)
@@ -217,9 +247,33 @@ static int read_nmea(const char* fname, std::vector<pvt_t>& vpvt)
 		else if (pvt.type == 4|| pvt.type == 5)
 		{
 			if (pvt.type == 4)
+			{
+#ifdef _PLOT_
+				if (!g_plot)
+				{
+					g_l2e = lat2local(pvt.lat, &g_l2n);
+					g_lat0 = pvt.lat;
+					g_lon0 = pvt.lon;
+					g_plot = 1;
+				}
+				lats_fix.push_back((pvt.lat-g_lat0)*g_l2n);
+				lons_fix.push_back((pvt.lon-g_lon0)*g_l2e);
+#endif
 				++numoffix;
+			}
 			++numofrtk;
 		}
+#ifdef _PLOT_
+		if (!g_plot)
+		{
+			g_l2e = lat2local(pvt.lat, &g_l2n);
+			g_lat0 = pvt.lat;
+			g_lon0 = pvt.lon;
+			g_plot = 1;
+		}
+		lats.push_back((pvt.lat - g_lat0) * g_l2n);
+		lons.push_back((pvt.lon - g_lon0) * g_l2e);
+#endif
 		vpvt.push_back(pvt);
 		if (!fCSV) fCSV = set_output_file(fname, "-gps.csv");
 		if (fCSV)
@@ -227,23 +281,15 @@ static int read_nmea(const char* fname, std::vector<pvt_t>& vpvt)
 			fprintf(fCSV, "%10.3f,%14.9f,%14.9f,%10.4f,%i,%i\n", pvt.time, pvt.lat * R2D, pvt.lon * R2D, pvt.ht, pvt.nsat, pvt.type);
 		}
 	}
+#ifdef _PLOT_
+	plt::plot(lons, lats,".");
+	plt::plot(lons_fix, lats_fix,".");
+	plt::grid(true);
+#endif
 	if (fLOG) fclose(fLOG);
 	if (fCSV) fclose(fCSV);
 	printf("%6i,%6i,%6i,%6i,%6i,%7.3f,%s\n", numofline, numofspp, numofdgps, numofrtk, numoffix, numofrtk > 0 ? 100.0 * numoffix / numofrtk : 0, fname);
 	return vpvt.size();
-}
-
-double lat2local(double lat, double* lat2north)
-{
-	double f_WGS84 = (1.0 / finv_WGS84);
-	double e2WGS84 = (2.0 * f_WGS84 - f_WGS84 * f_WGS84);
-	double slat = sin(lat);
-	double clat = cos(lat);
-	double one_e2_slat2 = 1.0 - e2WGS84 * slat * slat;
-	double Rn = ae_WGS84 / sqrt(one_e2_slat2);
-	double Rm = Rn * (1.0 - e2WGS84) / (one_e2_slat2);
-	*lat2north = Rm;
-	return Rn * clat;
 }
 
 static int sol_diff(const char* fname, std::vector<pvt_t>& pvt1, std::vector<pvt_t>& pvt2)
@@ -289,18 +335,50 @@ static int sol_diff(const char* fname, std::vector<pvt_t>& pvt1, std::vector<pvt
 	if (fDIF) fclose(fDIF);
 	return numofmatch;
 }
+
+static int test_plot()
+{
+	std::vector<double> t(1000);
+	std::vector<double> x(t.size());
+
+	for (size_t i = 0; i < t.size(); i++) {
+		t[i] = i / 100.0;
+		x[i] = sin(2.0 * PI * 1.0 * t[i]);
+	}
+
+	plt::xkcd();
+	plt::plot(t, x);
+	plt::title("AN ORDINARY SIN WAVE");
+	plt::save("xkcd.png");
+	return 0;
+}
+/* need to install matplotlib-cpp at upper directory https://github.com/lava/matplotlib-cpp.git */
+/* need to install python and add the path => normally go to cmd, and use path command to locate the python path, for example C:\Users\xxx\AppData\Local\Programs\Python\Python310 */
+/* need to install numpy and add the path for example, C:\Users\xxx\AppData\Local\Programs\Python\Python310\Lib\site-packages\numpy\core\include */
+/* comment out some lines in matplotlibcpp.h about NPY_INT64, NPY_UINT64*/
+/* add python310.lib in the path and dependencies, note this only works for release build, need to find the python310_d.lib for debug version */
 int main(int argc, char** argv)
 {
+#ifdef _PLOT_
+	g_plot = 0;
+#endif
+	//test_plot();
 	std::vector<pvt_t> vpvt1;
 	std::vector<pvt_t> vpvt2;
 	if (argc < 3)
 	{
+		read_nmea(argv[1], vpvt1);
 	}
 	else
 	{
-		read_nmea(argv[1], vpvt1);
 		read_nmea(argv[2], vpvt2);
 		sol_diff(argv[1], vpvt1, vpvt2);
 	}
+#ifdef _PLOT_
+	if (g_plot)
+	{
+		plt::show();
+	}
+#endif
 	return 0;
 }
