@@ -263,6 +263,7 @@ extern int input_rtcm2(rtcm_t *rtcm, uint8_t data)
 extern int input_rtcm3(rtcm_t *rtcm, uint8_t data)
 {
     trace(5,"input_rtcm3: data=%02x\n",data);
+    rtcm->type=rtcm->sync=rtcm->crc=0;
     
     /* synchronize frame */
     if (rtcm->nbyte==0) {
@@ -281,7 +282,13 @@ extern int input_rtcm3(rtcm_t *rtcm, uint8_t data)
     /* check parity */
     if (rtk_crc24q(rtcm->buff,rtcm->len)!=getbitu(rtcm->buff,rtcm->len*8,24)) {
         trace(2,"rtcm3 parity error: len=%d\n",rtcm->len);
+        rtcm->crc=1;
         return 0;
+    }
+    if (rtcm->len*8>=(12+12+12+30))
+    {
+        rtcm->type=getbitu(rtcm->buff,24,12); 
+        rtcm->sync=getbitu(rtcm->buff,24+12+12+30, 1);
     }
     /* decode rtcm3 message */
     return decode_rtcm3(rtcm);

@@ -5,8 +5,6 @@
 #include <string>
 #include <algorithm>
 
-#define _PLOT_
-
 #ifdef _PLOT_
 #include "..\matplotlib-cpp\matplotlibcpp.h"
 
