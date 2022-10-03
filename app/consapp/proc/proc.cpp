@@ -132,89 +132,182 @@ extern int outnmea_gga(unsigned char* buff, float time, int type, double* blh, i
 	return (int)(p - (char*)buff);
 }
 
-#ifndef MAX_BUF_LEN
-#define MAX_BUF_LEN 4096
-#endif
-
-typedef struct
+/* read the data until return 1, the ephemeris will also save to nav_t */
+static int read_rtcm_data(rtcm_t* rtcm, nav_t* nav, FILE *fRTCM)
 {
-	uint16_t type;
-	uint32_t count;
-}type_t;
-
-typedef struct
-{
-	gtime_t time;
-	uint16_t staid;
-	double pos[3];
-}coord_t;
-
-typedef struct
-{
-	uint8_t data[MAX_BUF_LEN];
-	uint16_t nbyte;
-	uint16_t nlen;
-	uint16_t type;
-	uint32_t numofcrc;
-	uint32_t numofmsg;
-	uint32_t numofepo;
-	uint32_t numofpos;
-	uint32_t numofeph[6];/* GPS,GLO,GAL,BDS,QZS,unknown*/
-}buff_t;
-
-static rtcm_t rtcm_rove;
-
-static int qc(const char* rovefname)
-{
-	FILE* fROV = fopen(rovefname, "rb");
-	FILE* fOUT = NULL;
-	int ret_rove = 0, data = 0, sys = 0, prn = 0, i = 0, j = 0;
-	buff_t status = { 0 };
-	std::vector<type_t> rtcm_type;
-	std::vector< coord_t> coords;
-	std::vector<obsd_t> obs;
-	while (fROV && !feof(fROV) && (data = fgetc(fROV)) != EOF)
+	int data = 0;
+	int ret = 0;
+	int sys = 0;
+	int prn = 0;
+	while (fRTCM && !feof(fRTCM) && (data = fgetc(fRTCM)) != EOF)
 	{
-		ret_rove = input_rtcm3(&rtcm_rove, data);
-		if (rtcm_rove.type > 0)
+		ret = input_rtcm3(rtcm, (uint8_t)data);
+		if (ret == 2)
 		{
-			int wk;
-			double ws = time2gpst(rtcm_rove.time, &wk);
-			printf("%10.3f,%4i,%4i,%i,%i\n", ws, rtcm_rove.type, rtcm_rove.staid, rtcm_rove.sync, rtcm_rove.crc);
-		}
-		if (ret_rove == 5)
-		{
-			/* pos 1005/1006 */
-			++status.numofpos;
-		}
-		else if (ret_rove == 2)
-		{
-			/* eph 1019,1020,1045/1046,1042,1041 */
-			sys = satsys(rtcm_rove.ephsat, &prn);
-			if (sys==SYS_GPS)
-				++status.numofeph[0];
-			else if (sys==SYS_GLO)
-				++status.numofeph[1];
-			else if (sys == SYS_GAL)
-				++status.numofeph[2];
-			else if (sys == SYS_CMP)
-				++status.numofeph[3];
-			else if (sys == SYS_QZS)
-				++status.numofeph[4];
-			else
-				++status.numofeph[5];
-		}
-		else if (ret_rove == 1)
-		{
-			/* obs MSM4,MSM7 */
-			for (i = 0; i < rtcm_rove.obs.n; ++i)
+			sys = satsys(rtcm->ephsat, &prn);
+			if (sys == SYS_GLO)
 			{
-				obs.push_back(rtcm_rove.obs.data[i]);
+				nav->geph[prn - 1] = rtcm->nav.geph[prn - 1];
+			}
+			else 
+			{
+				if (rtcm->ephset)
+					prn = prn;
+				nav->eph[rtcm->ephsat - 1 + MAXSAT * rtcm->ephset] = rtcm->nav.eph[rtcm->ephsat - 1 + MAXSAT * rtcm->ephset];
 			}
 		}
+		else if (ret == 10)
+		{
+			/* SSR */
+		}
+		else if (ret == 5)
+		{
+			/* station coordinate */
+		}
+		if (ret == 1) break;
 	}
-	if (fROV) fclose(fROV);
-	if (fOUT) fclose(fOUT);
+	return ret;
+}
+
+static int read_log_file(const char* fname, std::vector<std::string>& logfnames, int *year, int *mon, int *day)
+{
+	FILE* fINI = fopen(fname, "r");
+	char buffer[512] = { 0 };
+	char* val[MAXFIELD];
+	int type = 0;
+	int num = 0;
+	char* temp = 0;
+	std::time_t t = std::time(0);   // get time now
+	std::tm* now = std::localtime(&t);
+	*year = (now->tm_year + 1900);
+	*mon = (now->tm_mon + 1);
+	*day = now->tm_mday;
+	while (fINI && !feof(fINI) && fgets(buffer, sizeof(buffer), fINI) != NULL)
+	{
+		temp = strchr(buffer, '=');
+		if (temp) temp[0] = ',';
+		num = parse_fields(buffer, val);
+		if (num < 2) continue;
+		if (strstr(val[0], "date"))
+		{
+			if (num > 3)
+			{
+				*year = atoi(val[1]);
+				*mon = atoi(val[2]);
+				*day = atoi(val[3]);
+			}
+		}
+		else if (strstr(val[0], "rtcm"))
+		{
+			logfnames.push_back(val[1]);
+		}
+	}
+	if (fINI) fclose(fINI);
+	return (int)logfnames.size();
+}
+
+static int proc(const char* fname)
+{
+	std::vector<std::string> logfnames;
+	/* load the ini file to get the log file lists */
+	int year = 0, mon = 0, day = 0, numrcv = read_log_file(fname, logfnames, &year, &mon, &day), i = 0, j = 0, ret = 0, wk = 0;
+	/* read through file and process data */
+	std::vector<FILE*> rtcmfs(numrcv);
+	std::vector<rtcm_t> rtcms(numrcv);
+	gtime_t cur_time = { 0 }, nex_time = { 0 };
+	unsigned long numofepoch = 0;
+	double dt = 0, ws = 0;
+	nav_t nav; /* global */
+	/* open file, init and read the first epoch */
+	j = 0;
+	for (i = 0; i < numrcv; ++i)
+	{
+		rtcmfs[i] = fopen(logfnames[i].c_str(), "rb");
+		init_rtcm(&rtcms[i]);
+		/* read start time */
+		if (rtcmfs[i] && !feof(rtcmfs[i]))
+		{
+			ret = read_rtcm_data(&rtcms[i], &nav, rtcmfs[i]);
+			if (ret == 1)
+			{
+				if (j == 0)
+					cur_time = rtcms[i].time;
+				else
+				{
+					dt = timediff(cur_time, rtcms[i].time);
+					if (dt > 0.0)
+						cur_time = rtcms[i].time;
+				}
+				++j;
+			}
+		}
+		/**/
+	}
+	/* data processing and read more data */
+	while (1)
+	{
+		/* process current epoch data */
+		j = 0;
+		ws = time2gpst(cur_time, &wk);
+		printf("%10.4f,%6i\n", ws, numofepoch);
+		for (i = 0; i < numrcv; ++i)
+		{
+			ws = time2gpst(rtcms[i].time, &wk);
+			if (fabs(dt = timediff(cur_time, rtcms[i].time)) < 0.001)
+			{
+				++j;
+				/* convert data and add to engine */
+				printf("%10.4f,%3i,%3i,*\n", ws, rtcms[i].obs.n, i);
+			}
+			else
+			{
+				printf("%10.4f,%3i,%3i,-\n", ws, rtcms[i].obs.n, i);
+			}
+		}
+		/* data process */
+		if (j == 0) break; /* no more data */
+		++numofepoch;
+		/* read more data */
+		j = 0;
+		for (i = 0; i < numrcv; ++i)
+		{
+			dt = timediff(cur_time, rtcms[i].time);
+			if (dt < 0.0)
+			{
+				if (j == 0)
+					nex_time = rtcms[i].time;
+				else
+				{
+					if (timediff(nex_time, rtcms[i].time) > 0.0)
+						nex_time = rtcms[i].time;
+				}
+				++j;
+			}
+			else if (rtcmfs[i] && !feof(rtcmfs[i]))
+			{
+				ret = read_rtcm_data(&rtcms[i], &nav, rtcmfs[i]);
+				if (ret == 1)
+				{
+					if (j == 0)
+						nex_time = rtcms[i].time;
+					else
+					{
+						if (timediff(nex_time, rtcms[i].time) > 0.0)
+							nex_time = rtcms[i].time;
+					}
+					++j;
+				}
+			}
+		}
+		if (j == 0) break; /* no more new data */
+		cur_time = nex_time;
+	}
+	/* close files */
+	for (i = 0; i < numrcv; ++i)
+	{
+		free_rtcm(&rtcms[i]);
+		if (rtcmfs[i]) fclose(rtcmfs[i]);
+	}
 	return 0;
 }
 
@@ -228,39 +321,14 @@ static int qc(const char* rovefname)
 
 int main(int argc, char** argv)
 {
-	int ret_rtcm_rove = init_rtcm(&rtcm_rove);
-
-	std::time_t t = std::time(0);   // get time now
-	std::tm* now = std::localtime(&t);
-	int year = (now->tm_year + 1900);
-	int month = (now->tm_mon + 1);
-	int day = now->tm_mday;
-	double ep[6] = { year, month, day, 0, 0,0 };
-
 	if (argc < 2) /* 1 */
 	{
 		/* */
-		printf("%s rtcmfname yyy-mm-day\n", argv[0]);
+		printf("%s inifname\n", argv[0]);
 	}
-	else if (argc < 3) /* 2 */
+	else 
 	{
-		/* with input file name only */
-		rtcm_rove.time = rtcm_rove.time_s = epoch2time(ep);
-		qc(argv[1]);
+		proc(argv[1]);
 	}
-	else
-	{
-		int num = sscanf(argv[2], "%i-%i-%i", &year, &month, &day);
-		if (num>=3)
-		{
-			ep[0] = year;
-			ep[1] = month;
-			ep[2] = day;
-		}
-		rtcm_rove.time = rtcm_rove.time_s = epoch2time(ep);
-		qc(argv[1]);
-	}
-
-	free_rtcm(&rtcm_rove);
 	return 0;
 }
