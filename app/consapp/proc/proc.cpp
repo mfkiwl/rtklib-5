@@ -711,6 +711,21 @@ $GNSSOBS,0233,E10,069,25217.0000,1,  -835034.9258, 28663447.6591, -7316489.1719,
 
 /* input file will be rtcm file, please use the convbin to convert other format (rinex, ublox, septentrio, hemisphere, swiftnav, etc.) to rtcm */
 
+/* example ini file
+date = 2022,10,2
+rtcm = D:\gnss\multi_caster_logger\2022-10-2\2022-10-2-0-0-0-23km.log
+rtcm = D:\gnss\multi_caster_logger\2022-10-2\2022-10-2-0-0-0-5000.log
+rtcm = D:\gnss\multi_caster_logger\2022-10-2\2022-10-2-0-0-0-brdc.log
+rtcm = D:\gnss\multi_caster_logger\2022-10-2\2022-10-2-0-0-0-chqg.log
+rtcm = D:\gnss\multi_caster_logger\2022-10-2\2022-10-2-0-0-0-cong.log
+rtcm = D:\gnss\multi_caster_logger\2022-10-2\2022-10-2-0-0-0-dlr0.log
+rtcm = D:\gnss\multi_caster_logger\2022-10-2\2022-10-2-0-0-0-fsnh.log
+rtcm = D:\gnss\multi_caster_logger\2022-10-2\2022-10-2-0-0-0-gylc.log
+rtcm = D:\gnss\multi_caster_logger\2022-10-2\2022-10-2-0-0-0-gzzc.log
+rtcm = D:\gnss\multi_caster_logger\2022-10-2\2022-10-2-0-0-0-pync.log
+rtcm = D:\gnss\multi_caster_logger\2022-10-2\2022-10-2-0-0-0-qyqc.log
+*/
+
 int main(int argc, char** argv)
 {
 	if (argc < 2) /* 1 */
