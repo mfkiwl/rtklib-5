@@ -56,7 +56,7 @@ typedef struct {
 }sat_vec_t;
 
 #ifndef MAX_SAT 
-#define MAX_SAT (64)
+#define MAX_SAT (65)
 #endif
 
 typedef struct
@@ -64,6 +64,7 @@ typedef struct
     uint8_t n;
     sat_obs_t obs[MAX_SAT];
     sat_vec_t vec[MAX_SAT];
+    uint16_t wk;
     double time;
     double pos[3];
 }epoch_t;

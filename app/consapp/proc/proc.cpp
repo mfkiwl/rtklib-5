@@ -196,6 +196,7 @@ static inline std::string& trim(std::string& s) {
 static char sat2char(int sat, int* prn)
 {
 	int sys = satsys(sat, prn);
+	if (sys == SYS_QZS) *prn -= MINPRNQZS;
 	if (sys == SYS_GPS) return 'G';
 	else if (sys == SYS_GLO) return 'R';
 	else if (sys == SYS_GAL) return 'E';
@@ -242,17 +243,17 @@ static int convert_epoch_data(obs_t* obs, double* pos, nav_t* nav, epoch_t* epoc
 	{
 		ws = time2gpst(obsd->time, &wk);
 		sys = sat2char(obsd->sat, &prn);
-		if (fabs(rs[i * 6 + 0]) < 0.1 || fabs(rs[i * 6 + 1]) < 0.1 || fabs(rs[i * 6 + 2]) < 0.1) continue;
 		nf = 0;
+		memset(freq, 0, sizeof(freq));
+		memset(nfloc, 0, sizeof(nfloc));
 		for (f = 0; f < (NFREQ + NEXOBS); ++f)
 		{
 			if (obsd->code[f] > 0)
 			{
-				freq[nf] = sat2freq(obsd->sat, obsd->code[f], nav);
-				if (freq[nf] > 0.01)
+				freq[f] = sat2freq(obsd->sat, obsd->code[f], nav);
+				if (freq[f] > 0.01)
 				{
-					nfloc[nf] = f;
-					++nf;
+					nfloc[nf++] = f;
 				}
 			}
 		}
@@ -269,25 +270,86 @@ static int convert_epoch_data(obs_t* obs, double* pos, nav_t* nav, epoch_t* epoc
 			sat_obs->L[j] = obsd->L[f];
 			sat_obs->D[j] = obsd->D[f];
 			sat_obs->S[j] = obsd->SNR[f] * SNR_UNIT;
-			double frq = freq[j];
-			if (frq > 0.1)
-			{
-				sat_obs->wave[f] = CLIGHT / frq;
-			}
+			sat_obs->wave[j] = freq[f] > 0.1 ? CLIGHT / freq[f] : 0;
 		}
 		sat_vec_t* sat_vec = epoch->vec + epoch->n;
-		sat_vec->rs[0] = rs[i * 6 + 0];
-		sat_vec->rs[1] = rs[i * 6 + 1];
-		sat_vec->rs[2] = rs[i * 6 + 2];
-		sat_vec->rs[3] = rs[i * 6 + 3];
-		sat_vec->rs[4] = rs[i * 6 + 4];
-		sat_vec->rs[5] = rs[i * 6 + 5];
-		sat_vec->dts[0] = dts[i * 2 + 0] * CLIGHT;
-		sat_vec->dts[1] = dts[i * 2 + 1] * CLIGHT;
+		if (fabs(rs[i * 6 + 0]) < 0.1 || fabs(rs[i * 6 + 1]) < 0.1 || fabs(rs[i * 6 + 2]) < 0.1)
+		{
+
+		}
+		else
+		{
+			sat_vec->rs[0] = rs[i * 6 + 0];
+			sat_vec->rs[1] = rs[i * 6 + 1];
+			sat_vec->rs[2] = rs[i * 6 + 2];
+			sat_vec->rs[3] = rs[i * 6 + 3];
+			sat_vec->rs[4] = rs[i * 6 + 4];
+			sat_vec->rs[5] = rs[i * 6 + 5];
+			sat_vec->dts[0] = dts[i * 2 + 0] * CLIGHT;
+			sat_vec->dts[1] = dts[i * 2 + 1] * CLIGHT;
+		}
 		epoch->n++;
 	}
 	free(rs); free(dts); free(var);
 	return epoch->n;
+}
+
+static int print_obs_data(int staid, epoch_t* epoch, FILE* fOUT)
+{
+	if (fOUT && epoch->n > 0)
+	{
+		char buff[1024] = { 0 };
+		char* p = (char*)buff, * q, sum;
+		/* output position $GNSSPOS, staid, nsat, wk, ws, X,Y,Z */
+		if (fabs(epoch->pos[0]) < 0.1 || fabs(epoch->pos[1]) < 0.1 || fabs(epoch->pos[2]) < 0.1)
+		{
+
+		}
+		else
+		{
+			p += sprintf(p, "$GNSSPOS,%04i,%03i,%4i,%10.4f,%14.4f,%14.4f,%14.4f", staid, epoch->n, epoch->wk, epoch->time, epoch->pos[0], epoch->pos[1], epoch->pos[2]);
+			for (q = (char*)buff + 1, sum = 0; *q; q++) sum ^= *q; /* check-sum */
+			p += sprintf(p, "*%02X%c%c", sum, 0x0D, 0x0A);
+			fprintf(fOUT, "%s", buff);
+		}
+		sat_obs_t* sat_obs = epoch->obs + 0;
+		sat_vec_t* sat_vec = epoch->vec + 0;
+		int i = 0, j = 0, nf = 0, loc[MAX_FRQ] = { 0 }, f = 0;
+		for (; i < epoch->n; ++i, ++sat_obs, ++sat_vec)
+		{
+			nf = 0;
+			for (j = 0; j < MAX_FRQ; ++j)
+			{
+				if (sat_obs->code[j])
+					loc[nf++] = j;
+			}
+			if (nf == 0) continue;
+			memset(buff, 0, sizeof(buff));
+			p = (char*)buff;
+			p += sprintf(p, "$GNSSOBS,%04i,%c%02i,%03i,%10.4f", staid, sat_obs->sys, sat_obs->prn, sat_obs->sat, epoch->time);
+
+			if (fabs(sat_vec->rs[0]) < 0.1 || fabs(sat_vec->rs[1]) < 0.1 || fabs(sat_vec->rs[2]) < 0.1)
+			{
+				p += sprintf(p, ",0");
+			}
+			else
+			{
+				p += sprintf(p, ",1,%14.4f,%14.4f,%14.4f,%10.4f,%10.4f,%10.4f,%14.4f,%10.4f", sat_vec->rs[0], sat_vec->rs[1], sat_vec->rs[2], sat_vec->rs[3], sat_vec->rs[4], sat_vec->rs[5], sat_vec->dts[0], sat_vec->dts[1]);
+			}
+
+			p += sprintf(p, ",%i", nf);
+			for (j = 0; j < nf; ++j)
+			{
+				f = loc[j];
+				p += sprintf(p, ",%3i,%14.4f,%14.4f,%10.4f,%3i,%.0f", sat_obs->code[f], sat_obs->P[f], sat_obs->L[f], sat_obs->D[f], sat_obs->S[f], sat_obs->wave[f] > 0.001 ? CLIGHT / sat_obs->wave[f] : 0);
+			}
+			for (q = (char*)buff + 1, sum = 0; *q; q++) sum ^= *q; /* check-sum */
+			p += sprintf(p, "*%02X%c%c", sum, 0x0D, 0x0A);
+			fprintf(fOUT, "%s", buff);
+			fflush(fOUT);
+		}
+	}
+	return 1;
 }
 
 static int read_log_file(const char* fname, std::vector<std::string>& logfnames, int *year, int *mon, int *day)
@@ -342,7 +404,7 @@ static int init_nav(nav_t* nav)
 	eph_t  eph0 = { 0,-1,-1 };
 	geph_t geph0 = { 0,-1 };
 	ssr_t ssr0 = { {{0}} };
-	int i, j;
+	int i=0;
 
 	trace(3, "init_rtcm:\n");
 
@@ -362,8 +424,10 @@ static int init_nav(nav_t* nav)
 	nav->ng = MAXPRNGLO;
 	for (i = 0; i < MAXSAT * 2; i++) nav->eph[i] = eph0;
 	for (i = 0; i < MAXPRNGLO; i++) nav->geph[i] = geph0;
+	return 1;
 }
 
+/* process the data from rtcm log files */
 static int proc(const char* fname)
 {
 	std::vector<std::string> logfnames;
@@ -377,7 +441,13 @@ static int proc(const char* fname)
 	double dt = 0, ws = 0, ep[6] = { year, mon, day, 0, 0, 0 };
 	nav_t nav = { 0 }; /* global */
 	epoch_t epoch = { 0 };
+	/* init ephemeris data struct */
 	init_nav(&nav);
+	/* output raw data file for output */
+	char buffer[255] = { 0 };
+	sprintf(buffer, "%04i-%02i-%02i-obs.log", year, mon, day);
+	FILE *fOBS = fopen(buffer, "w");
+	FILE* fTMP = fopen("rtcm_log.csv", "w");
 	/* open file, init and read the first epoch */
 	j = 0;
 	for (i = 0; i < numrcv; ++i)
@@ -419,7 +489,9 @@ static int proc(const char* fname)
 				printf("%10.4f,%3i,%3i,*\n", ws, rtcms[i].obs.n, i);
 				if (convert_epoch_data(&rtcms[i].obs, rtcms[i].sta.pos, &nav, &epoch))
 				{
-					add_rcv_data(rtcms[i].staid, &epoch);
+					print_obs_data(i + 1, &epoch, fOBS);
+					if (fTMP) fprintf(fTMP, "%10.4f,%3i,%3i,%6i\n", ws, rtcms[i].obs.n, i + 1, numofepoch);
+					add_rcv_data(i + 1, &epoch); /* use the station index as the station ID */
 				}
 			}
 			else
@@ -471,14 +543,163 @@ static int proc(const char* fname)
 		if (j == 0) break; /* no more new data */
 		cur_time = nex_time;
 	}
-	/* close files */
+	/* free rtcm data struct and close rtcm files */
 	for (i = 0; i < numrcv; ++i)
 	{
 		free_rtcm(&rtcms[i]);
 		if (rtcmfs[i]) fclose(rtcmfs[i]);
 	}
-	/* free */
+	/* free ephemeris data struct */
 	free_nav(&nav);
+	/* close the raw data file */
+	if (fOBS) fclose(fOBS); fOBS = NULL;
+	if (fTMP) fclose(fTMP); fTMP = NULL;
+	return 0;
+}
+
+
+/* process the data from log csv file */
+static int proc_csv(const char* fname)
+{
+	FILE* fLOG = fopen(fname, "r");
+	char buffer[512] = { 0 };
+	char* val[MAXFIELD];
+	int ret = 0, num = 0, staid =-1;
+	epoch_t epoch = { 0 };
+	FILE* fTMP = fopen("log.csv", "w");
+	unsigned long numofepoch = 0;
+	double cur_time = 0;
+	while (fLOG && !feof(fLOG) && (fgets(buffer, sizeof(buffer), fLOG)) != NULL)
+	{
+		num = parse_fields(buffer, val);
+		if (num < 2) continue;
+		if (strstr(val[0], "GNSSPOS") != NULL)
+		{
+			/* $GNSSPOS,0556,047,   0,25217.0000, -2348583.1770,  5355378.8290,  2538133.6170*44 */
+			if (num < 8) continue;
+			int cur_staid = atoi(val[1]);
+			int nsat = atoi(val[2]);
+			int wk = atoi(val[3]);
+			double ws = atof(val[4]);
+			double pos[3] = { atof(val[5]), atof(val[6]), atof(val[7]) };
+			if ((cur_staid != staid && staid >= 0) || fabs(ws - epoch.time) > 0.01)
+			{
+				/* new data */
+				if (staid >= 0 && epoch.n > 0)
+				{
+					if (fabs(cur_time - epoch.time) > 0.01)
+					{
+						cur_time = epoch.time;
+						++numofepoch;
+					}
+					printf("%10.4f,%3i,%3i,%6i\n", epoch.time, epoch.n, staid, numofepoch);
+					if (fTMP) fprintf(fTMP, "%10.4f,%3i,%3i,%6i\n", epoch.time, epoch.n, staid, numofepoch);
+					add_rcv_data(staid, &epoch);
+				}
+				memset(&epoch, 0, sizeof(epoch_t));
+			}
+			epoch.pos[0] = pos[0];
+			epoch.pos[1] = pos[1];
+			epoch.pos[2] = pos[2];
+			epoch.time = ws;
+			staid = cur_staid;
+		}
+		else if (strstr(val[0], "GNSSOBS") != NULL)
+		{
+			/*
+$GNSSOBS,0233,E09,068,25217.0000,0,4, 12, 25998903.6908,136625249.2254,    0.0000, 45,1575420000, 29, 25998919.2548,104686996.5750,    0.0000, 47,1207140000, 26, 25998922.5963,102025482.6126,    0.0000, 46,1176450000, 33, 25998914.5195,110897205.2252,    0.0000, 46,1278750000*34
+$GNSSOBS,0233,E10,069,25217.0000,1,  -835034.9258, 28663447.6591, -7316489.1719,   62.1004, -749.9842,-2949.8190,  -144144.1597,   -0.0008,4, 12, 25431865.8957,133645220.4514,    0.0000, 47,1575420000, 29, 25431883.6218,102403474.7888,    0.0000, 47,1207140000, 26, 25431887.2492, 99800004.7328,    0.0000, 47,1176450000, 33, 25431879.5477,108478260.4761,    0.0000, 47,1278750000*3A
+			*/
+			if (num < 5) continue;
+			int cur_staid = atoi(val[1]);
+			if (strlen(val[2]) < 3) continue;
+			uint8_t sys = val[2][0];
+			uint8_t prn = atoi(val[2] + 1);
+			uint8_t sat = atoi(val[3]);
+			double ws = atof(val[4]);
+			if ((cur_staid != staid && staid >= 0) || fabs(ws - epoch.time) > 0.01)
+			{
+				/* new data */
+				if (staid >= 0 && epoch.n > 0)
+				{
+					if (fabs(cur_time - epoch.time) > 0.01)
+					{
+						cur_time = epoch.time;
+						++numofepoch;
+					}
+					printf("%10.4f,%3i,%3i,%6i\n", epoch.time, epoch.n, staid, numofepoch);
+					if (fTMP) fprintf(fTMP, "%10.4f,%3i,%3i,%6i\n", epoch.time, epoch.n, staid, numofepoch);
+					add_rcv_data(staid, &epoch);
+				}
+				memset(&epoch, 0, sizeof(epoch_t));
+			}
+			epoch.time = ws;
+			staid = cur_staid;
+			int sat_pv_flag = atoi(val[5]);
+			sat_vec_t* sat_vec = epoch.vec + epoch.n;
+			sat_obs_t* sat_obs = epoch.obs + epoch.n;
+			memset(sat_vec, 0, sizeof(sat_vec_t));
+			memset(sat_obs, 0, sizeof(sat_obs_t));
+			sat_obs->sys = sys;
+			sat_obs->prn = prn;
+			sat_obs->sat = sat;
+			int loc = 14;
+			if (sat_pv_flag)
+			{
+				/* wth satellite pos, vel, clock */
+				if (num < 14) continue;
+				sat_vec->rs[0] = atof(val[6]);
+				sat_vec->rs[1] = atof(val[7]);
+				sat_vec->rs[2] = atof(val[8]);
+				sat_vec->rs[3] = atof(val[9]);
+				sat_vec->rs[4] = atof(val[10]);
+				sat_vec->rs[5] = atof(val[11]);
+				sat_vec->dts[0] = atof(val[12]);
+				sat_vec->dts[1] = atof(val[13]);
+			}
+			else
+			{
+				if (num < 6) continue;
+				loc = 6;
+			}
+			int nf = atof(val[loc]), f = 0;
+			int tnum = (loc + 1 + nf * 6);
+			if (num < tnum) continue;
+			if (nf > 0)
+			{
+				for (f = 0; f < nf; ++f)
+				{
+					int cur_loc = loc + 1 + f * 6;
+					sat_obs->code[f] = atoi(val[cur_loc + 0]);
+					sat_obs->P[f] = atof(val[cur_loc + 1]);
+					sat_obs->L[f] = atof(val[cur_loc + 2]);
+					sat_obs->D[f] = atof(val[cur_loc + 3]);
+					sat_obs->S[f] = atoi(val[cur_loc + 4]);
+					double cur_frq = atof(val[cur_loc + 5]);
+					if (cur_frq > 0.1)
+						sat_obs->wave[f] = CLIGHT / cur_frq;
+				}
+			}
+			if (epoch.n < MAX_SAT)
+				++epoch.n;
+			else
+				epoch.n = epoch.n;
+		}
+	}
+	/* last data */
+	if (staid >= 0 && epoch.n > 0)
+	{
+		if (fabs(cur_time - epoch.time) > 0.01)
+		{
+			cur_time = epoch.time;
+			++numofepoch;
+		}
+		printf("%10.4f,%3i,%3i,%6i\n", epoch.time, epoch.n, staid, numofepoch);
+		if (fTMP) fprintf(fTMP, "%10.4f,%3i,%3i,%6i\n", epoch.time, epoch.n, staid, numofepoch);
+		add_rcv_data(staid, &epoch);
+	}
+	if (fLOG) fclose(fLOG);
+	if (fTMP) fclose(fTMP);
 	return 0;
 }
 
@@ -497,6 +718,7 @@ int main(int argc, char** argv)
 		/* */
 		printf("%s inifname\n", argv[0]);
 		proc("network.ini");
+		//proc_csv("D:\\gnss\\rtklib\\app\\consapp\\proc\\2022-10-02-obs.log");
 	}
 	else 
 	{
