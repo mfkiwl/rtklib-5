@@ -1503,6 +1503,7 @@ EXPORT int  init_rnxctr (rnxctr_t *rnx);
 EXPORT void free_rnxctr (rnxctr_t *rnx);
 EXPORT int  open_rnxctr (rnxctr_t *rnx, FILE *fp);
 EXPORT int  input_rnxctr(rnxctr_t *rnx, FILE *fp);
+EXPORT int readrnxfp(FILE *fp, gtime_t ts, gtime_t te, double tint, const char *opt, int flag, int index, char *type, obs_t *obs, nav_t *nav, sta_t *sta);
 
 /* ephemeris and clock functions ---------------------------------------------*/
 EXPORT double eph2clk (gtime_t time, const eph_t  *eph);

@@ -1483,7 +1483,7 @@ static int readrnxclk(FILE *fp, const char *opt, int index, nav_t *nav)
     return nav->nc>0;
 }
 /* read RINEX file -----------------------------------------------------------*/
-static int readrnxfp(FILE *fp, gtime_t ts, gtime_t te, double tint,
+extern int readrnxfp(FILE *fp, gtime_t ts, gtime_t te, double tint,
                      const char *opt, int flag, int index, char *type,
                      obs_t *obs, nav_t *nav, sta_t *sta)
 {
